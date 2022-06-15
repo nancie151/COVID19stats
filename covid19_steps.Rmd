@@ -1,0 +1,236 @@
+---
+title: "COVID19cases"
+date: "5/17/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+This data-set records COVID-19 statistics since January 2020 in both the United States and global, operated by the Johns Hopkins University Center for Systems Science and Engineering (JHU CSSE). The data-set gets updated daily. 
+
+```{r get_jhu_data, message=FALSE}
+##load library
+library(tidyverse)
+library(lubridate)
+## Get current data in the four files
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names<- c("time_series_covid19_confirmed_global.csv",
+               "time_series_covid19_deaths_global.csv",
+               "time_series_covid19_confirmed_US.csv",
+               "time_series_covid19_deaths_US.csv")
+urls <-str_c(url_in, file_names) ##concatenated the url for 4 files 
+```
+
+```{r import_data, message= FALSE}
+global_cases <-read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+us_cases <- read_csv(urls[3])
+us_deaths<-read_csv(urls[4])
+```
+
+# Tidy data
+## Global data
+### Tidy gobal_cases column
+```{r tidy_global_cases_data}
+global_cases<-global_cases %>%
+  pivot_longer(cols=-c(`Province/State`,
+                        `Country/Region`,
+                        Lat, Long),
+               names_to="date",
+               values_to="cases") %>%
+  mutate(date=mdy(date)) %>% ##force to interpret as mdy
+  select(-c(Lat,Long))
+```
+
+### Tidy global_deaths column
+```{r tidy_global_death_data}
+global_deaths<-global_deaths %>%
+  pivot_longer(cols=-c(`Province/State`,
+                        `Country/Region`,
+                        Lat, Long),
+               names_to="date",
+               values_to="deaths") %>%
+  mutate(date=mdy(date)) %>% ##force to interpret as mdy
+  select(-c(Lat,Long))
+```
+
+### Concatenated global_cases and global_deaths
+```{r concatenate_global, message=FALSE}
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = `Country/Region`,
+         Province_State =`Province/State`)
+```
+
+## US data
+### Tidy US_cases column
+```{r tidy_US_cases}
+us_cases <- us_cases %>%
+  pivot_longer(cols=-(UID:Combined_Key),
+               names_to="date",
+               values_to="cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date=mdy(date)) %>% ##force to interpret as mdy
+  select(-c(Lat,Long_))
+```
+
+### Tidy US_deaths column
+```{r tidy_US_deaths}
+us_deaths<-us_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to="date",
+               values_to="deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date=mdy(date))%>%
+  select(-c(Lat,Long_))
+
+```
+
+### Concatenated us_cases and us_deaths
+```{r concatenated_US_cases_deaths, message=FALSE}
+us <- us_cases %>%
+  full_join(us_deaths)
+```
+
+### Create new column
+```{r combine_global}
+## Create new column called Combine_Key so that Gobal data and US data have the same variables
+global<-global %>%
+  unite("Combine_Key",
+        c(Province_State, Country_Region),
+        sep=",",
+        na.rm=TRUE,
+        remove=FALSE)
+
+```
+
+### Look up URL for for global population data
+```{r lookup_url, message=FALSE}
+uid_look_up <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+uid <- read_csv(uid_look_up) %>%
+  select(-c(Lat,Long_, Combined_Key, code3, iso2, iso3, Admin2))
+```
+
+### Join dataset so global dataset has population column
+```{r join_data}
+global<-global %>%
+  left_join(uid, by= c("Province_State", 
+                       "Country_Region")) %>%
+  select(-c(UID,FIPS)) %>%
+  select(Province_State, 
+         Country_Region, 
+         date, cases,deaths, Population, 
+         Combine_Key)
+
+```
+
+## Data Visualization
+
+### US_by_state
+```{r us_by_state, message=FALSE}
+us_by_state <- us %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases=sum(cases), deaths=sum(deaths), Population=sum(Population)) %>%
+  mutate(death_per_mill=deaths*1000000/ Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, death_per_mill, Population)%>%
+  ungroup()
+
+```
+
+### US_totals
+```{r, message=FALSE}
+us_totals <- us_by_state %>%
+group_by(Country_Region, date) %>%
+  summarize(cases=sum(cases), deaths=sum(deaths), Population=sum(Population)) %>%
+  mutate(death_per_mill=deaths*1000000/ Population) %>%
+  select(Country_Region, date, cases, deaths, death_per_mill, Population)%>%
+  ungroup()
+```
+
+### Visualize total us_cases
+```{r us_totals_visualization}
+us_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y=cases)) +
+  geom_line(aes(color= "cases")) +
+  geom_point(aes(color="cases")) +
+  geom_line(aes(y=deaths, color="deaths")) +
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10() +
+  theme(legend.position="bottom",
+       axis.text.x=element_text(angle = 90))+
+  labs(title= "COVID19 in US", y=NULL)
+```
+
+### Visualize cases in Texas
+```{r}
+state <- "Texas"
+us_by_state %>%
+  filter((Province_State == state)) %>% 
+  filter(cases > 0) %>%
+  ggplot(aes(x=date, y=cases)) +
+  geom_line(aes(color= "cases")) +
+  geom_point(aes(color="cases")) +
+  geom_line(aes(y=deaths, color="deaths")) +
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10() +
+  theme(legend.position="bottom",
+       axis.text.x=element_text(angle = 90))+
+  labs(title= str_c("COVID19 in ", state), y=NULL)
+```
+
+
+## Data Analysis
+
+### Top 10 states with lowest deaths per thousand 
+```{r}
+us_state_totals<- us_by_state %>%
+  group_by(Province_State) %>%
+  summarize(deaths = max(deaths), cases=max(cases),
+            population=max(Population),
+            cases_per_thou=1000*cases/population,
+            deaths_per_thou=1000*deaths/population) %>%
+  filter(cases>0, population >0)
+us_state_totals %>%
+slice_min(deaths_per_thou, n=10)
+```
+### Top 10 states with highest deaths per thousand 
+```{r}
+us_state_totals<- us_by_state %>%
+  group_by(Province_State) %>%
+  summarize(deaths = max(deaths), cases=max(cases),
+            population=max(Population),
+            cases_per_thou=1000*cases/population,
+            deaths_per_thou=1000*deaths/population) %>%
+  filter(cases>0, population >0)
+us_state_totals %>%
+slice_max(deaths_per_thou, n=10)
+```
+We can see that American Samoa has the lowest deaths per thousand, and Mississippi has the most deaths per thousand. In fact, top 10 states with the lowest deaths per thousand also have the smallest population, and top 10 states with the highest deaths per thousand have the largest amount of people. 
+
+## Data Modelling 
+
+```{r}
+mod <- lm(deaths_per_thou ~cases_per_thou, data= us_state_totals)
+summary(mod)
+```
+
+```{r}
+us_tot_w_pred <- us_state_totals %>% mutate(pred=predict(mod))
+```
+
+```{r}
+us_tot_w_pred %>% ggplot() +
+  geom_point(aes(x= cases_per_thou, y=deaths_per_thou), color= "blue") +
+  geom_point(aes(x=cases_per_thou, y=pred), color= "red")
+```
+
+## Conclusion
+From the model and scatter plot, it is shown that there is a positive relationship between cases and deaths. The p-values is 1.675e-05 for the relationship which indicate they are statistically significant. There is clear indication that cases are indication for deaths where the actual cases and deaths follows the predicted model, though the actual model are more scattered than the predicted models. Other factors need to be taken into account to explained why the actual model is more scattered; for example, with the arising COVID vaccine, people recover better which can decreases the deaths rate. 
+## Bias 
+For my data visualization, I chose Texas to analyze as this is where I live, which I thought would be interested to see the statisical modelling for this state.
